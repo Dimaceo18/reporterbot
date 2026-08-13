@@ -98,8 +98,9 @@ stats = {
 # ==================== ШРИФТЫ ====================
 
 def download_fonts():
+    """Скачивание шрифтов"""
     fonts_urls = {
-        "Montserrat-Black.ttf": "https://github.com/google/fonts/raw/main/ofl/montserrat/Montserrat-Black.ttf",
+        "Montserrat-Black.ttf": "https://raw.githubusercontent.com/Dimaceo18/reporterbot/main/Montserrat-Black.ttf",
         "Arial.ttf": "https://github.com/matomo-org/travis-scripts/raw/master/fonts/Arial.ttf",
     }
     for font_name, url in fonts_urls.items():
@@ -110,18 +111,53 @@ def download_fonts():
                 if response.status_code == 200:
                     with open(font_name, "wb") as f:
                         f.write(response.content)
-                    logger.info(f"✅ Шрифт {font_name} скачан")
+                    logger.info(f"✅ Шрифт {font_name} скачан (размер: {len(response.content)} байт)")
+                else:
+                    logger.warning(f"⚠️ Не удалось скачать {font_name}, статус: {response.status_code}")
             except Exception as e:
                 logger.error(f"❌ Ошибка скачивания {font_name}: {e}")
+        else:
+            logger.info(f"✅ Шрифт {font_name} уже есть (размер: {os.path.getsize(font_name)} байт)")
 
 def load_font(font_name: str, size: int):
+    """Загрузка шрифта с fallback"""
+    # Пробуем Montserrat
     try:
-        return ImageFont.truetype(font_name, size=size)
-    except Exception:
+        if os.path.exists("Montserrat-Black.ttf"):
+            font = ImageFont.truetype("Montserrat-Black.ttf", size=size)
+            logger.info(f"✅ Загружен шрифт Montserrat-Black.ttf (размер: {size})")
+            return font
+    except Exception as e:
+        logger.warning(f"⚠️ Не удалось загрузить Montserrat: {e}")
+    
+    # Пробуем Arial
+    try:
+        if os.path.exists("Arial.ttf"):
+            font = ImageFont.truetype("Arial.ttf", size=size)
+            logger.info(f"✅ Загружен шрифт Arial.ttf (размер: {size})")
+            return font
+    except Exception as e:
+        logger.warning(f"⚠️ Не удалось загрузить Arial: {e}")
+    
+    # Пробуем системные шрифты
+    system_fonts = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        "/usr/share/fonts/truetype/ubuntu/Ubuntu-B.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf"
+    ]
+    
+    for font_path in system_fonts:
         try:
-            return ImageFont.truetype(FONT_FALLBACK, size=size)
+            font = ImageFont.truetype(font_path, size=size)
+            logger.info(f"✅ Загружен системный шрифт: {font_path}")
+            return font
         except:
-            return ImageFont.load_default()
+            pass
+    
+    # Последний шанс - встроенный
+    logger.warning("⚠️ Использую встроенный шрифт ImageFont.load_default()")
+    return ImageFont.load_default()
 
 # ==================== ОБРАБОТКА ИЗОБРАЖЕНИЙ ====================
 
