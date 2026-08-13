@@ -2,11 +2,12 @@ services:
   - type: web
     name: telegram-repost-bot
     env: python
+    plan: free
     buildCommand: |
       apt-get update
-      apt-get install -y ffmpeg python3-pil python3-pil.imagetk
+      apt-get install -y ffmpeg
       pip install --upgrade pip
-      pip install --no-cache-dir -r requirements.txt
+      pip install -r requirements.txt
     startCommand: python bot.py
     envVars:
       - key: BOT_TOKEN
