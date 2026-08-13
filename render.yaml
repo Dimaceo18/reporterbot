@@ -1,0 +1,17 @@
+services:
+  - type: worker
+    name: telegram-bot
+    runtime: python
+    buildCommand: |
+      pip install --upgrade pip
+      pip install -r requirements.txt
+    startCommand: python bot.py
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: SOURCE_CHANNEL_ID
+        sync: false
+      - key: TARGET_CHANNEL_ID
+        sync: false
+    plan: free
+    pythonVersion: 3.11.0  # <-- Указываем версию Python
