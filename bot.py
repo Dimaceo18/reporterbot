@@ -517,6 +517,8 @@ async def process_post(message, context: ContextTypes.DEFAULT_TYPE):
         text = get_text_from_message(message)
         title = extract_title_from_text(text)
         
+        logger.info(f"📝 Заголовок: {title[:50] if title else 'нет'}")
+        
         # Обработка фото
         if hasattr(message, 'photo') and message.photo:
             logger.info(f"📸 Обработка фото")
@@ -596,8 +598,12 @@ async def handle_channel_post(update: Update, context: ContextTypes.DEFAULT_TYPE
         logger.info("❌ Нет сообщения в update")
         return
     
-    # Проверка ID канала
+    # ДЕТАЛЬНОЕ ЛОГИРОВАНИЕ
     logger.info(f"📨 ПОСТ ПОЛУЧЕН! ID канала: {message.chat.id}, SOURCE: {SOURCE_CHANNEL_ID}")
+    logger.info(f"📝 Есть фото: {hasattr(message, 'photo') and bool(message.photo)}")
+    logger.info(f"📝 Есть видео: {hasattr(message, 'video') and bool(message.video)}")
+    logger.info(f"📝 Есть текст: {bool(get_text_from_message(message))}")
+    logger.info(f"📝 Media Group ID: {getattr(message, 'media_group_id', 'Нет')}")
     
     if message.chat.id != SOURCE_CHANNEL_ID:
         logger.info(f"⏭️ Пропускаем: канал {message.chat.id} не равен {SOURCE_CHANNEL_ID}")
@@ -605,6 +611,28 @@ async def handle_channel_post(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     logger.info(f"📨 Новый пост в канале {SOURCE_CHANNEL_ID}")
     await process_post(message, context)
+
+async def handle_media_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик медиагрупп (несколько фото/видео)"""
+    message = update.channel_post
+    if not message:
+        return
+    
+    if message.chat.id != SOURCE_CHANNEL_ID:
+        logger.info(f"⏭️ Пропускаем медиагруппу из канала {message.chat.id}")
+        return
+    
+    logger.info(f"📦 Медиагруппа в канале: {message.media_group_id}")
+    logger.info(f"📝 Есть фото: {hasattr(message, 'photo') and bool(message.photo)}")
+    logger.info(f"📝 Есть видео: {hasattr(message, 'video') and bool(message.video)}")
+    
+    # Берем первое фото или видео
+    if hasattr(message, 'photo') and message.photo:
+        logger.info(f"📸 Обработка первого фото из медиагруппы")
+        await process_post(message, context)
+    elif hasattr(message, 'video') and message.video:
+        logger.info(f"📹 Обработка первого видео из медиагруппы")
+        await process_post(message, context)
 
 # ==================== ЗАПУСК ====================
 
@@ -649,8 +677,14 @@ async def main():
     
     # Регистрируем обработчик постов из канала
     app.add_handler(MessageHandler(
-        filters.Chat(chat_id=SOURCE_CHANNEL_ID),
+        filters.Chat(chat_id=SOURCE_CHANNEL_ID) & ~filters.MEDIA_GROUP,
         handle_channel_post
+    ))
+    
+    # Регистрируем обработчик медиагрупп
+    app.add_handler(MessageHandler(
+        filters.Chat(chat_id=SOURCE_CHANNEL_ID) & filters.MEDIA_GROUP,
+        handle_media_group
     ))
     
     logger.info("✅ Обработчики зарегистрированы")
