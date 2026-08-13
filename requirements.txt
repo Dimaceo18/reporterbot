@@ -1,1 +1,6 @@
-# Все зависимости устанавливаются через pip в render.yaml
+python-telegram-bot==20.7
+Pillow==10.1.0
+moviepy==1.0.3
+requests==2.31.0
+numpy==1.26.0
+ffmpeg-python==0.2.0
