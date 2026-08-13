@@ -1,14 +1,9 @@
 services:
   - type: web
     name: reporterbot
-    env: python
+    runtime: image
     plan: free
-    buildCommand: |
-      apt-get update
-      apt-get install -y ffmpeg
-      pip install --upgrade pip
-      pip install -r requirements.txt
-    startCommand: python bot.py
+    dockerfilePath: ./Dockerfile
     envVars:
       - key: BOT_TOKEN
         sync: false
