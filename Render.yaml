@@ -1,13 +1,17 @@
 services:
   - type: web
-    name: telegram-monitor-bot
+    name: telegram-repost-bot
     env: python
-    buildCommand: pip install -r requirements.txt
+    buildCommand: |
+      apt-get update
+      apt-get install -y ffmpeg python3-pil python3-pil.imagetk
+      pip install --upgrade pip
+      pip install --no-cache-dir -r requirements.txt
     startCommand: python bot.py
     envVars:
       - key: BOT_TOKEN
         sync: false
-      - key: MONITOR_CHANNEL_ID
+      - key: SOURCE_CHANNEL_ID
         sync: false
-      - key: ADMIN_CHAT_ID
+      - key: TARGET_CHANNEL_ID
         sync: false
