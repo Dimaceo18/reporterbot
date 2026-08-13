@@ -1,10 +1,12 @@
 services:
   - type: worker
-    name: telegram-bot
+    name: reporterbot
     runtime: python
     buildCommand: |
-      pip install --upgrade pip
-      pip install -r requirements.txt
+      apt-get update
+      apt-get install -y ffmpeg
+      chmod +x render-build.sh
+      ./render-build.sh
     startCommand: python bot.py
     envVars:
       - key: BOT_TOKEN
@@ -14,4 +16,3 @@ services:
       - key: TARGET_CHANNEL_ID
         sync: false
     plan: free
-    pythonVersion: 3.11.0  # <-- Указываем версию Python
