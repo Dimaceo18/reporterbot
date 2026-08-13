@@ -12,39 +12,50 @@ import traceback
 import asyncio
 from datetime import datetime
 
-# Проверяем и устанавливаем необходимые библиотеки
-try:
-    import requests
-except ImportError:
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "requests"])
-    import requests
+# ==================== АВТОУСТАНОВКА ЗАВИСИМОСТЕЙ ====================
 
-try:
-    from moviepy import VideoFileClip
-    from moviepy.video.compositing.concatenate import concatenate_videoclips
-except ImportError:
-    try:
-        from moviepy.video.io.VideoFileClip import VideoFileClip
-        from moviepy.video.compositing.concatenate import concatenate_videoclips
-    except:
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "moviepy==1.0.3"])
-        from moviepy.video.io.VideoFileClip import VideoFileClip
-        from moviepy.video.compositing.concatenate import concatenate_videoclips
+def install_dependencies():
+    """Автоматическая установка всех зависимостей"""
+    deps = [
+        "python-telegram-bot==20.7",
+        "Pillow==10.1.0",
+        "moviepy==1.0.3",
+        "requests==2.31.0",
+        "numpy==1.26.0",
+        "ffmpeg-python==0.2.0"
+    ]
+    for dep in deps:
+        try:
+            package_name = dep.split("==")[0].replace("-", "_")
+            __import__(package_name)
+        except ImportError:
+            print(f"📦 Устанавливаем {dep}...")
+            subprocess.check_call([sys.executable, "-m", "pip", "install", dep])
 
-try:
-    import numpy as np
-except ImportError:
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "numpy==1.26.0"])
-    import numpy as np
+install_dependencies()
 
+# ==================== ИМПОРТЫ ====================
+
+import requests
+import numpy as np
 from PIL import Image, ImageDraw, ImageFont, ImageEnhance
 from telegram import Bot, Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes, CommandHandler
 
+try:
+    from moviepy import VideoFileClip
+except ImportError:
+    try:
+        from moviepy.video.io.VideoFileClip import VideoFileClip
+    except:
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "moviepy==1.0.3"])
+        from moviepy.video.io.VideoFileClip import VideoFileClip
+
 # ==================== НАСТРОЙКИ ====================
+
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-SOURCE_CHANNEL_ID = os.getenv("SOURCE_CHANNEL_ID")  # Канал-источник
-TARGET_CHANNEL_ID = os.getenv("TARGET_CHANNEL_ID")  # Целевой канал
+SOURCE_CHANNEL_ID = os.getenv("SOURCE_CHANNEL_ID")
+TARGET_CHANNEL_ID = os.getenv("TARGET_CHANNEL_ID")
 
 if not BOT_TOKEN:
     raise ValueError("❌ BOT_TOKEN не настроен!")
@@ -59,7 +70,7 @@ try:
 except ValueError:
     raise ValueError("❌ SOURCE_CHANNEL_ID и TARGET_CHANNEL_ID должны быть числами!")
 
-# НАСТРОЙКИ СТИЛЯ (ЧП ВМ)
+# Стиль ЧП ВМ
 TARGET_W, TARGET_H = 720, 900
 CHP_GRADIENT_PCT = 0.48
 MN_TITLE_ZONE_PCT = 0.23
@@ -68,6 +79,7 @@ FONT_CHP = "Montserrat-Black.ttf"
 FONT_FALLBACK = "Arial.ttf"
 
 # ==================== ЛОГИРОВАНИЕ ====================
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -81,9 +93,10 @@ stats = {
     "errors": 0
 }
 
-# ==================== ФУНКЦИИ ====================
+# ==================== ШРИФТЫ ====================
 
 def download_fonts():
+    """Скачивание шрифтов"""
     fonts_urls = {
         "Montserrat-Black.ttf": "https://github.com/google/fonts/raw/main/ofl/montserrat/Montserrat-Black.ttf",
         "Arial.ttf": "https://github.com/matomo-org/travis-scripts/raw/master/fonts/Arial.ttf",
@@ -101,6 +114,7 @@ def download_fonts():
                 logger.error(f"❌ Ошибка скачивания {font_name}: {e}")
 
 def load_font(font_name: str, size: int):
+    """Загрузка шрифта"""
     try:
         return ImageFont.truetype(font_name, size=size)
     except Exception:
@@ -109,7 +123,10 @@ def load_font(font_name: str, size: int):
         except:
             return ImageFont.load_default()
 
+# ==================== ОБРАБОТКА ИЗОБРАЖЕНИЙ ====================
+
 def crop_to_ratio(img: Image.Image, target_w: int, target_h: int) -> Image.Image:
+    """Обрезка под соотношение 4:5"""
     w, h = img.size
     target_ratio = target_w / target_h
     cur_ratio = w / h
@@ -124,6 +141,7 @@ def crop_to_ratio(img: Image.Image, target_w: int, target_h: int) -> Image.Image
         return img.crop((0, top, w, top + new_h))
 
 def apply_bottom_gradient(img: Image.Image, height_pct: float, max_alpha: int = 220) -> Image.Image:
+    """Градиент снизу"""
     w, h = img.size
     gh = int(h * height_pct)
     if gh <= 0:
@@ -144,6 +162,7 @@ def apply_bottom_gradient(img: Image.Image, height_pct: float, max_alpha: int = 
     return out.convert("RGB")
 
 def text_width(draw, s: str, font) -> int:
+    """Ширина текста"""
     try:
         bbox = draw.textbbox((0, 0), s, font=font)
         return bbox[2] - bbox[0]
@@ -151,6 +170,7 @@ def text_width(draw, s: str, font) -> int:
         return len(s) * font.size // 2
 
 def wrap_text(draw, text: str, font, max_width: int, max_lines: int = 6):
+    """Перенос текста"""
     words = text.split()
     if not words:
         return [""], True
@@ -171,6 +191,7 @@ def wrap_text(draw, text: str, font, max_width: int, max_lines: int = 6):
 
 def fit_text_block(draw, text: str, safe_w: int, max_block_h: int,
                    max_lines: int = 6, start_size: int = 90, min_size: int = 16):
+    """Подбор размера шрифта"""
     text = (text or "").strip()
     if not text:
         text = " "
@@ -216,6 +237,7 @@ def fit_text_block(draw, text: str, safe_w: int, max_block_h: int,
     return font, lines, heights, spacing, total_h
 
 def clean_title_for_card(title: str) -> str:
+    """Очистка заголовка от эмодзи"""
     if not title:
         return ""
     
@@ -241,6 +263,7 @@ def clean_title_for_card(title: str) -> str:
     return clean.strip()
 
 def extract_title_from_text(text: str) -> str:
+    """Извлечение заголовка из текста"""
     if not text:
         return ""
     
@@ -282,6 +305,7 @@ def extract_title_from_text(text: str) -> str:
     return clean_text
 
 def process_image(img: Image.Image, title_text: str) -> Image.Image:
+    """Обработка изображения"""
     try:
         img = crop_to_ratio(img, TARGET_W, TARGET_H)
         img = img.resize((TARGET_W, TARGET_H), Image.Resampling.LANCZOS)
@@ -305,7 +329,6 @@ def process_image(img: Image.Image, title_text: str) -> Image.Image:
         
         line_height = font.size
         total_text_height = len(lines) * line_height + (len(lines) - 1) * 2
-        
         y = img.height - margin_bottom - total_text_height
         
         for ln in lines:
@@ -313,16 +336,15 @@ def process_image(img: Image.Image, title_text: str) -> Image.Image:
             y += line_height + 2
         
         return img
-        
     except Exception as e:
         logger.error(f"❌ Ошибка обработки изображения: {e}")
         return img
 
 def process_photo_bytes(photo_bytes: bytes, title_text: str) -> BytesIO:
+    """Обработка фото из байтов"""
     try:
         img = Image.open(BytesIO(photo_bytes)).convert("RGB")
         img = process_image(img, title_text)
-        
         output = BytesIO()
         img.save(output, format="PNG")
         output.seek(0)
@@ -331,7 +353,10 @@ def process_photo_bytes(photo_bytes: bytes, title_text: str) -> BytesIO:
         logger.error(f"❌ Ошибка обработки фото: {e}")
         return BytesIO(photo_bytes)
 
+# ==================== ОБРАБОТКА ВИДЕО ====================
+
 def process_video_frame(frame: np.ndarray, title_text: str) -> np.ndarray:
+    """Обработка кадра видео"""
     try:
         img = Image.fromarray(frame).convert("RGB")
         img = process_image(img, title_text)
@@ -341,6 +366,7 @@ def process_video_frame(frame: np.ndarray, title_text: str) -> np.ndarray:
         return frame
 
 def process_video_bytes(video_bytes: bytes, title_text: str) -> BytesIO:
+    """Обработка видео из байтов"""
     temp_input = None
     temp_output = None
     
@@ -363,13 +389,11 @@ def process_video_bytes(video_bytes: bytes, title_text: str) -> BytesIO:
         
         if video.audio is not None:
             try:
-                logger.info(f"🎵 Сохраняем оригинальное аудио...")
                 processed_video = processed_video.set_audio(video.audio)
                 logger.info(f"✅ Оригинальное аудио сохранено")
             except Exception as e:
                 logger.error(f"❌ Ошибка сохранения аудио: {e}")
         
-        logger.info(f"💾 Сохранение видео...")
         processed_video.write_videofile(
             temp_output,
             codec='libx264',
@@ -410,43 +434,43 @@ def process_video_bytes(video_bytes: bytes, title_text: str) -> BytesIO:
         except:
             pass
 
+# ==================== СКАЧИВАНИЕ МЕДИА ====================
+
 async def download_media(bot: Bot, file_id: str) -> Optional[bytes]:
+    """Скачивание медиа"""
     try:
         file = await bot.get_file(file_id)
-        logger.info(f"📥 Скачивание...")
         result = await file.download_as_bytearray()
-        logger.info(f"✅ Скачано: {len(result) / (1024*1024):.1f} MB")
         return bytes(result)
     except Exception as e:
         logger.error(f"❌ Ошибка скачивания: {e}")
         return None
 
 def get_text_from_message(message) -> str:
+    """Получение текста из сообщения"""
     return message.text or message.caption or ""
 
 # ==================== КОМАНДЫ ====================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда /start"""
     uptime = datetime.now() - stats['started_at']
     hours = uptime.seconds // 3600
     minutes = (uptime.seconds % 3600) // 60
     
     await update.message.reply_text(
         f"🤖 <b>Бот для репоста с оформлением ЧП ВМ</b>\n\n"
-        f"📢 <b>Статус:</b>\n"
-        f"• Канал-источник: <code>{SOURCE_CHANNEL_ID}</code>\n"
-        f"• Целевой канал: <code>{TARGET_CHANNEL_ID}</code>\n"
-        f"• Стиль: ЧП ВМ (720x900)\n\n"
-        f"📊 <b>Статистика:</b>\n"
-        f"• Обработано постов: {stats['processed']}\n"
-        f"• Ошибок: {stats['errors']}\n"
-        f"• Запущен: {stats['started_at'].strftime('%d.%m.%Y %H:%M:%S')}\n"
-        f"• Время работы: {hours}ч {minutes}м\n\n"
-        f"✅ <b>Бот работает!</b> 🟢",
+        f"📢 Канал-источник: <code>{SOURCE_CHANNEL_ID}</code>\n"
+        f"📢 Целевой канал: <code>{TARGET_CHANNEL_ID}</code>\n"
+        f"📊 Обработано: {stats['processed']}\n"
+        f"❌ Ошибок: {stats['errors']}\n"
+        f"⏱ Работает: {hours}ч {minutes}м\n\n"
+        f"✅ <b>Бот работает!</b>",
         parse_mode="HTML"
     )
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда /stats"""
     uptime = datetime.now() - stats['started_at']
     hours = uptime.seconds // 3600
     minutes = (uptime.seconds % 3600) // 60
@@ -463,20 +487,16 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="HTML"
     )
 
-# ==================== ОСНОВНАЯ ЛОГИКА ====================
+# ==================== ОБРАБОТКА ПОСТОВ ====================
 
 async def process_post(message, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка поста из канала"""
     try:
-        logger.info(f"📨 Получен пост из канала {message.chat.id}")
-        
         text = get_text_from_message(message)
         title = extract_title_from_text(text)
         
-        has_photos = hasattr(message, 'photo') and message.photo
-        has_video = hasattr(message, 'video') and message.video
-        
         # Обработка фото
-        if has_photos:
+        if hasattr(message, 'photo') and message.photo:
             logger.info(f"📸 Обработка фото")
             photo = message.photo[-1]  # Самое качественное
             photo_bytes = await download_media(context.bot, photo.file_id)
@@ -487,12 +507,6 @@ async def process_post(message, context: ContextTypes.DEFAULT_TYPE):
                 return
             
             processed = process_photo_bytes(photo_bytes, title)
-            
-            if not processed or len(processed.getvalue()) == 0:
-                logger.error("❌ Ошибка обработки фото")
-                stats['errors'] += 1
-                return
-            
             caption = text[:1024] if text else ""
             
             await context.bot.send_photo(
@@ -501,15 +515,13 @@ async def process_post(message, context: ContextTypes.DEFAULT_TYPE):
                 caption=caption,
                 parse_mode="HTML"
             )
-            
             stats['processed'] += 1
             logger.info(f"✅ Фото отправлено в канал {TARGET_CHANNEL_ID}")
             return
         
         # Обработка видео
-        if has_video:
+        if hasattr(message, 'video') and message.video:
             logger.info(f"📹 Обработка видео")
-            
             video_bytes = await download_media(context.bot, message.video.file_id)
             
             if not video_bytes:
@@ -518,12 +530,6 @@ async def process_post(message, context: ContextTypes.DEFAULT_TYPE):
                 return
             
             processed = process_video_bytes(video_bytes, title)
-            
-            if not processed or len(processed.getvalue()) == 0:
-                logger.error("❌ Ошибка обработки видео")
-                stats['errors'] += 1
-                return
-            
             caption = text[:1024] if text else ""
             
             await context.bot.send_video(
@@ -534,7 +540,6 @@ async def process_post(message, context: ContextTypes.DEFAULT_TYPE):
                 width=TARGET_W,
                 height=TARGET_H
             )
-            
             stats['processed'] += 1
             logger.info(f"✅ Видео отправлено в канал {TARGET_CHANNEL_ID}")
             return
@@ -559,13 +564,16 @@ async def process_post(message, context: ContextTypes.DEFAULT_TYPE):
         traceback.print_exc()
 
 async def handle_channel_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик постов из канала-источника"""
     message = update.channel_post
     if not message:
         return
     
+    # Проверяем, что пост из нужного канала
     if message.chat.id != SOURCE_CHANNEL_ID:
         return
     
+    # Пропускаем служебные сообщения
     if hasattr(message, 'new_chat_members') or hasattr(message, 'left_chat_member'):
         return
     
@@ -577,8 +585,10 @@ async def handle_channel_post(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def main():
     logger.info("🚀 Бот для репоста с оформлением ЧП ВМ запускается...")
     
+    # Скачиваем шрифты
     download_fonts()
     
+    # Создаем приложение
     app = Application.builder().token(BOT_TOKEN).build()
     bot = Bot(token=BOT_TOKEN)
     
@@ -592,33 +602,37 @@ async def main():
     # Проверяем доступ к каналам
     try:
         source = await bot.get_chat(SOURCE_CHANNEL_ID)
-        logger.info(f"✅ Канал-источник: {source.title}")
+        logger.info(f"✅ Канал-источник: {source.title} (ID: {SOURCE_CHANNEL_ID})")
     except Exception as e:
         logger.error(f"❌ Ошибка доступа к каналу-источнику: {e}")
+        logger.info("💡 Убедитесь, что бот добавлен в канал как администратор")
         return
     
     try:
         target = await bot.get_chat(TARGET_CHANNEL_ID)
-        logger.info(f"✅ Целевой канал: {target.title}")
+        logger.info(f"✅ Целевой канал: {target.title} (ID: {TARGET_CHANNEL_ID})")
     except Exception as e:
         logger.error(f"❌ Ошибка доступа к целевому каналу: {e}")
+        logger.info("💡 Убедитесь, что бот добавлен в канал как администратор")
         return
     
-    # Команды
+    # Регистрируем команды
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("stats", stats_command))
     
-    # Обработчик постов из канала
+    # Регистрируем обработчик постов из канала
     app.add_handler(MessageHandler(
         filters.Chat(chat_id=SOURCE_CHANNEL_ID) & filters.ALL,
         handle_channel_post
     ))
     
     logger.info("✅ Обработчики зарегистрированы")
-    logger.info(f"📊 Размер: {TARGET_W}x{TARGET_H}")
-    logger.info(f"📢 Канал-источник: {SOURCE_CHANNEL_ID}")
-    logger.info(f"📢 Целевой канал: {TARGET_CHANNEL_ID}")
+    logger.info(f"📊 Параметры оформления (ЧП ВМ):")
+    logger.info(f"  • Размер: {TARGET_W}x{TARGET_H}")
+    logger.info(f"  • Градиент: {int(CHP_GRADIENT_PCT*100)}%")
+    logger.info(f"  • Затемнение: {int(BRIGHTNESS_FACTOR*100)}%")
     
+    # Запускаем бота
     await app.initialize()
     await app.start()
     
@@ -632,8 +646,10 @@ async def main():
         connect_timeout=30
     )
     
-    logger.info("🟢 Бот запущен!")
+    logger.info("🟢 Бот запущен и слушает канал!")
+    logger.info("📨 Отправьте пост в канал-источник для теста")
     
+    # Бесконечный цикл
     while True:
         await asyncio.sleep(1)
 
