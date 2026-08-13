@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: telegram-monitor-bot
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: MONITOR_CHANNEL_ID
+        sync: false
+      - key: ADMIN_CHAT_ID
+        sync: false
