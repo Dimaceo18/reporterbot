@@ -452,9 +452,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"❌ Ошибок: {stats['errors']}\n"
         f"⏱ Работает: {hours}ч {minutes}м\n"
         f"📌 Последний пост: {stats['last_post'] or 'нет'}\n\n"
-        f"🔄 <b>Проверка подключения:</b>\n"
-        f"• Канал-источник: {'✅ Доступен' if SOURCE_CHANNEL_ID else '❌'}\n"
-        f"• Целевой канал: {'✅ Доступен' if TARGET_CHANNEL_ID else '❌'}\n\n"
         f"✅ <b>Бот работает!</b>",
         parse_mode="HTML"
     )
@@ -599,15 +596,11 @@ async def handle_channel_post(update: Update, context: ContextTypes.DEFAULT_TYPE
         logger.info("❌ Нет сообщения в update")
         return
     
-    # ПРОВЕРКА: ID канала
+    # Проверка ID канала
     logger.info(f"📨 ПОСТ ПОЛУЧЕН! ID канала: {message.chat.id}, SOURCE: {SOURCE_CHANNEL_ID}")
     
     if message.chat.id != SOURCE_CHANNEL_ID:
         logger.info(f"⏭️ Пропускаем: канал {message.chat.id} не равен {SOURCE_CHANNEL_ID}")
-        return
-    
-    if hasattr(message, 'new_chat_members') or hasattr(message, 'left_chat_member'):
-        logger.info("⏭️ Служебное сообщение (добавление/удаление участника)")
         return
     
     logger.info(f"📨 Новый пост в канале {SOURCE_CHANNEL_ID}")
