@@ -149,7 +149,6 @@ def load_font(font_name: str, size: int):
         except:
             pass
     
-    # Последний шанс - встроенный
     return ImageFont.load_default()
 
 # ==================== ОБРАБОТКА ИЗОБРАЖЕНИЙ ====================
@@ -485,6 +484,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"❌ Ошибок: {stats['errors']}\n"
         f"⏱ Работает: {hours}ч {minutes}м\n"
         f"📌 Последний пост: {stats['last_post'] or 'нет'}\n\n"
+        f"📌 <b>Как использовать:</b>\n"
+        f"• Отправьте боту пост (фото/видео/текст) - он обработает и опубликует\n"
+        f"• Посты из канала-источника обрабатываются автоматически\n"
+        f"• Команда /stats - статистика\n"
+        f"• Команда /test - проверка подключения\n\n"
         f"✅ <b>Бот работает!</b>",
         parse_mode="HTML"
     )
@@ -542,7 +546,8 @@ async def test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ==================== ОБРАБОТКА ПОСТОВ ====================
 
-async def process_post(message, context: ContextTypes.DEFAULT_TYPE):
+async def process_post(message, context: ContextTypes.DEFAULT_TYPE, source: str = "channel"):
+    """Обработка поста из канала или от пользователя"""
     try:
         text = get_text_from_message(message)
         title = extract_title_from_text(text)
@@ -558,6 +563,8 @@ async def process_post(message, context: ContextTypes.DEFAULT_TYPE):
             if not photo_bytes:
                 logger.error("❌ Не удалось скачать фото")
                 stats['errors'] += 1
+                if source == "user":
+                    await message.reply_text("❌ Не удалось скачать фото")
                 return
             
             processed = process_photo_bytes(photo_bytes, title)
@@ -572,6 +579,9 @@ async def process_post(message, context: ContextTypes.DEFAULT_TYPE):
             stats['processed'] += 1
             stats['last_post'] = f"Фото в {datetime.now().strftime('%H:%M:%S')}"
             logger.info(f"✅ Фото отправлено в канал {TARGET_CHANNEL_ID}")
+            
+            if source == "user":
+                await message.reply_text("✅ Фото обработано и опубликовано в канале!")
             return
         
         # Обработка видео
@@ -582,6 +592,8 @@ async def process_post(message, context: ContextTypes.DEFAULT_TYPE):
             if not video_bytes:
                 logger.error("❌ Не удалось скачать видео")
                 stats['errors'] += 1
+                if source == "user":
+                    await message.reply_text("❌ Не удалось скачать видео")
                 return
             
             processed = process_video_bytes(video_bytes, title)
@@ -598,6 +610,9 @@ async def process_post(message, context: ContextTypes.DEFAULT_TYPE):
             stats['processed'] += 1
             stats['last_post'] = f"Видео в {datetime.now().strftime('%H:%M:%S')}"
             logger.info(f"✅ Видео отправлено в канал {TARGET_CHANNEL_ID}")
+            
+            if source == "user":
+                await message.reply_text("✅ Видео обработано и опубликовано в канале!")
             return
         
         # Текстовый пост
@@ -611,15 +626,25 @@ async def process_post(message, context: ContextTypes.DEFAULT_TYPE):
             stats['processed'] += 1
             stats['last_post'] = f"Текст в {datetime.now().strftime('%H:%M:%S')}"
             logger.info(f"✅ Текст отправлен в канал {TARGET_CHANNEL_ID}")
+            
+            if source == "user":
+                await message.reply_text("✅ Текст опубликован в канале!")
             return
         
         logger.info("ℹ️ Пост пустой, пропускаем")
+        if source == "user":
+            await message.reply_text("⚠️ Пост пустой, пропускаю")
         
     except Exception as e:
         stats['errors'] += 1
         stats['last_error'] = str(e)
         logger.error(f"❌ Ошибка обработки поста: {e}")
         traceback.print_exc()
+        if source == "user":
+            try:
+                await message.reply_text(f"❌ Ошибка при обработке: {str(e)[:200]}")
+            except:
+                pass
 
 async def handle_channel_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик постов из канала-источника"""
@@ -638,7 +663,33 @@ async def handle_channel_post(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
     
     logger.info(f"📨 Новый пост в канале {SOURCE_CHANNEL_ID}")
-    await process_post(message, context)
+    await process_post(message, context, source="channel")
+
+async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик сообщений от пользователей (репостов в бота)"""
+    message = update.message
+    if not message:
+        return
+    
+    # Игнорируем команды
+    if message.text and message.text.startswith('/'):
+        return
+    
+    # Проверяем, есть ли контент для обработки
+    has_content = (
+        (hasattr(message, 'photo') and bool(message.photo)) or
+        (hasattr(message, 'video') and bool(message.video)) or
+        bool(get_text_from_message(message))
+    )
+    
+    if not has_content:
+        await message.reply_text("📭 Отправьте мне фото, видео или текст для обработки и публикации.")
+        return
+    
+    logger.info(f"📨 Новый пост от пользователя {message.from_user.id}")
+    await message.reply_text("📥 Пост получен! Начинаю обработку...")
+    
+    await process_post(message, context, source="user")
 
 # ==================== ЗАПУСК ====================
 
@@ -672,13 +723,21 @@ async def main():
         logger.info("💡 Убедитесь, что бот добавлен в канал как администратор")
         return
     
+    # Регистрируем команды
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("stats", stats_command))
     app.add_handler(CommandHandler("test", test_command))
     
+    # Регистрируем обработчик постов из канала
     app.add_handler(MessageHandler(
         filters.Chat(chat_id=SOURCE_CHANNEL_ID),
         handle_channel_post
+    ))
+    
+    # Регистрируем обработчик сообщений от пользователей (репостов)
+    app.add_handler(MessageHandler(
+        filters.ALL & ~filters.COMMAND,
+        handle_user_message
     ))
     
     logger.info("✅ Обработчики зарегистрированы")
@@ -700,8 +759,8 @@ async def main():
         connect_timeout=30
     )
     
-    logger.info("🟢 Бот запущен и слушает канал!")
-    logger.info("📨 Отправьте пост в канал-источник для теста")
+    logger.info("🟢 Бот запущен и слушает канал и сообщения!")
+    logger.info("📨 Отправьте пост в канал-источник или репостните боту для теста")
     logger.info("💡 Команды для проверки: /start, /stats, /test")
     
     while True:
