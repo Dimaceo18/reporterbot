@@ -218,15 +218,12 @@ def wrap_text(draw, text: str, font, max_width: int, max_lines: int = 6):
 
 def fit_text_block(draw, text: str, safe_w: int, max_block_h: int,
                    max_lines: int = 6, start_size: int = 90, min_size: int = 16):
-    """Подбор размера шрифта с защитой от зацикливания"""
     text = (text or "").strip()
     if not text:
         text = " "
     
     size = start_size
-    attempts = 0
-    while size >= min_size and attempts < 30:
-        attempts += 1
+    while size >= min_size:
         font = load_font(FONT_CHP, size)
         lines, ok = wrap_text(draw, text, font, safe_w, max_lines=max_lines)
         spacing = int(size * 0.22)
@@ -291,7 +288,6 @@ def clean_title_for_card(title: str) -> str:
     return clean.strip()
 
 def extract_title_from_text(text: str) -> str:
-    """Извлечение заголовка из текста (как в рабочей версии)"""
     if not text:
         return ""
     
@@ -469,15 +465,6 @@ async def download_media(bot: Bot, file_id: str) -> Optional[bytes]:
         logger.error(f"❌ Ошибка скачивания: {e}")
         return None
 
-async def download_media_bytes(bot: Bot, file_id: str) -> Optional[bytes]:
-    try:
-        file = await bot.get_file(file_id)
-        result = await file.download_as_bytearray()
-        return bytes(result)
-    except Exception as e:
-        logger.error(f"❌ Ошибка скачивания: {e}")
-        return None
-
 def get_text_from_message(message) -> str:
     return message.text or message.caption or ""
 
@@ -580,11 +567,11 @@ async def process_media_group(media_group_id: str, context: ContextTypes.DEFAULT
         
         # Фото
         for photo in group.get("photos", []):
-            media_files.append({"type": "photo", "data": photo, "file_id": photo.get("file_id")})
+            media_files.append({"type": "photo", "file_id": photo.get("file_id")})
         
         # Видео
         for video in group.get("videos", []):
-            media_files.append({"type": "video", "data": video, "file_id": video.get("file_id")})
+            media_files.append({"type": "video", "file_id": video.get("file_id")})
         
         if not media_files:
             logger.warning(f"⚠️ Нет медиа в группе {media_group_id}")
@@ -822,11 +809,11 @@ async def handle_channel_post(update: Update, context: ContextTypes.DEFAULT_TYPE
         
         # Сохраняем медиа
         if hasattr(message, 'photo') and message.photo:
-            group["photos"].append({"file_id": message.photo[-1].file_id, "photo": message.photo[-1]})
+            group["photos"].append({"file_id": message.photo[-1].file_id})
             logger.info(f"📸 Добавлено фото в группу {media_group_id}, всего: {len(group['photos'])}")
         
         if hasattr(message, 'video') and message.video:
-            group["videos"].append({"file_id": message.video.file_id, "video": message.video})
+            group["videos"].append({"file_id": message.video.file_id})
             logger.info(f"📹 Добавлено видео в группу {media_group_id}, всего: {len(group['videos'])}")
         
         # Запускаем таймер для обработки группы (ждем 3 секунды, чтобы собрать все части)
@@ -868,11 +855,11 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         group = pending_media_groups[media_group_id]
         
         if hasattr(message, 'photo') and message.photo:
-            group["photos"].append({"file_id": message.photo[-1].file_id, "photo": message.photo[-1]})
+            group["photos"].append({"file_id": message.photo[-1].file_id})
             logger.info(f"📸 Добавлено фото в группу от пользователя, всего: {len(group['photos'])}")
         
         if hasattr(message, 'video') and message.video:
-            group["videos"].append({"file_id": message.video.file_id, "video": message.video})
+            group["videos"].append({"file_id": message.video.file_id})
             logger.info(f"📹 Добавлено видео в группу от пользователя, всего: {len(group['videos'])}")
         
         if not group.get("timer_started"):
