@@ -128,24 +128,20 @@ def download_fonts():
             logger.info(f"✅ Шрифт {font_name} уже есть (размер: {os.path.getsize(font_name)} байт)")
 
 def load_font(font_name: str, size: int):
-    """Загрузка шрифта с fallback"""
+    """Загрузка шрифта с fallback (без логов для уменьшения шума)"""
     # Пробуем Montserrat
     try:
         if os.path.exists("Montserrat-Black.ttf"):
-            font = ImageFont.truetype("Montserrat-Black.ttf", size=size)
-            logger.info(f"✅ Загружен шрифт Montserrat-Black.ttf (размер: {size})")
-            return font
-    except Exception as e:
-        logger.warning(f"⚠️ Не удалось загрузить Montserrat: {e}")
+            return ImageFont.truetype("Montserrat-Black.ttf", size=size)
+    except:
+        pass
     
     # Пробуем Arial
     try:
         if os.path.exists("Arial.ttf"):
-            font = ImageFont.truetype("Arial.ttf", size=size)
-            logger.info(f"✅ Загружен шрифт Arial.ttf (размер: {size})")
-            return font
-    except Exception as e:
-        logger.warning(f"⚠️ Не удалось загрузить Arial: {e}")
+            return ImageFont.truetype("Arial.ttf", size=size)
+    except:
+        pass
     
     # Пробуем системные шрифты
     system_fonts = [
@@ -157,14 +153,11 @@ def load_font(font_name: str, size: int):
     
     for font_path in system_fonts:
         try:
-            font = ImageFont.truetype(font_path, size=size)
-            logger.info(f"✅ Загружен системный шрифт: {font_path}")
-            return font
+            return ImageFont.truetype(font_path, size=size)
         except:
             pass
     
     # Последний шанс - встроенный
-    logger.warning("⚠️ Использую встроенный шрифт ImageFont.load_default()")
     return ImageFont.load_default()
 
 # ==================== ОБРАБОТКА ИЗОБРАЖЕНИЙ ====================
@@ -231,12 +224,19 @@ def wrap_text(draw, text: str, font, max_width: int, max_lines: int = 6):
 
 def fit_text_block(draw, text: str, safe_w: int, max_block_h: int,
                    max_lines: int = 6, start_size: int = 90, min_size: int = 16):
+    """Подбор размера шрифта с защитой от зацикливания"""
     text = (text or "").strip()
     if not text:
         text = " "
     
+    # Ограничиваем длину текста
+    if len(text) > 200:
+        text = text[:197] + "..."
+    
     size = start_size
-    while size >= min_size:
+    attempts = 0
+    while size >= min_size and attempts < 30:
+        attempts += 1
         font = load_font(FONT_CHP, size)
         lines, ok = wrap_text(draw, text, font, safe_w, max_lines=max_lines)
         spacing = int(size * 0.22)
@@ -255,10 +255,13 @@ def fit_text_block(draw, text: str, safe_w: int, max_block_h: int,
             total_h += lh
             max_w = max(max_w, lw)
         total_h += spacing * (len(lines) - 1)
+        
         if ok and max_w <= safe_w and total_h <= max_block_h:
             return font, lines, heights, spacing, total_h
+        
         size -= 2
     
+    # Если ничего не подошло - минимальный размер
     font = load_font(FONT_CHP, min_size)
     lines, _ = wrap_text(draw, text, font, safe_w, max_lines=max_lines)
     spacing = int(min_size * 0.22)
@@ -326,19 +329,19 @@ def extract_title_from_text(text: str) -> str:
     if '\n' in clean_text:
         lines = clean_text.split('\n')
         title = lines[0].strip()
-        if len(title) > 200:
-            title = title[:197] + "..."
+        if len(title) > 150:
+            title = title[:147] + "..."
         return title
     
     if '. ' in clean_text and len(clean_text) > 100:
         parts = clean_text.split('. ', 1)
         title = (parts[0] + '.').strip()
-        if len(title) > 200:
-            title = title[:197] + "..."
+        if len(title) > 150:
+            title = title[:147] + "..."
         return title
     
-    if len(clean_text) > 200:
-        return clean_text[:197] + "..."
+    if len(clean_text) > 150:
+        return clean_text[:147] + "..."
     return clean_text
 
 def process_image(img: Image.Image, title_text: str) -> Image.Image:
@@ -496,7 +499,7 @@ async def send_status_notification(update: Update, context: ContextTypes.DEFAULT
     
     try:
         # Отправляем статус в личку пользователю, если это репост в бота
-        if update.message and update.message.from_user:
+        if update and update.message and update.message.from_user:
             await update.message.reply_text(
                 f"{status_messages.get(status, status)}",
                 parse_mode="HTML"
@@ -632,16 +635,15 @@ async def process_post(message, context: ContextTypes.DEFAULT_TYPE, source: str 
         stats['pending_posts'] += 1
         stats['processing'] = True
         
+        # Получаем update из контекста для отправки статусов
+        current_update = context.user_data.get('current_update') if source == "user" else None
+        
         # Отправляем статус "получен"
-        if source == "user":
-            await send_status_notification(update=None, context=context, status="received", post_id=post_id)
-            # Сохраняем update для отправки статусов
-            current_update = context.user_data.get('current_update')
-            if current_update:
-                try:
-                    await current_update.message.reply_text("📥 Пост получен! Начинаю обработку...")
-                except:
-                    pass
+        if source == "user" and current_update:
+            try:
+                await current_update.message.reply_text("📥 Пост получен! Начинаю обработку...")
+            except:
+                pass
         
         text = get_text_from_message(message)
         title = extract_title_from_text(text)
@@ -649,10 +651,9 @@ async def process_post(message, context: ContextTypes.DEFAULT_TYPE, source: str 
         logger.info(f"📝 Заголовок: {title[:50] if title else 'нет'}")
         
         # Статус "скачивание"
-        if source == "user":
+        if source == "user" and current_update:
             try:
-                if current_update:
-                    await current_update.message.reply_text("⬇️ Скачиваю медиафайлы...")
+                await current_update.message.reply_text("⬇️ Скачиваю медиафайлы...")
             except:
                 pass
         
@@ -661,10 +662,9 @@ async def process_post(message, context: ContextTypes.DEFAULT_TYPE, source: str 
             logger.info(f"📸 Обработка фото")
             
             # Статус "обработка"
-            if source == "user":
+            if source == "user" and current_update:
                 try:
-                    if current_update:
-                        await current_update.message.reply_text("🔄 Обрабатываю изображение...")
+                    await current_update.message.reply_text("🔄 Обрабатываю изображение...")
                 except:
                     pass
             
@@ -674,10 +674,9 @@ async def process_post(message, context: ContextTypes.DEFAULT_TYPE, source: str 
             if not photo_bytes:
                 logger.error("❌ Не удалось скачать фото")
                 stats['errors'] += 1
-                if source == "user":
+                if source == "user" and current_update:
                     try:
-                        if current_update:
-                            await current_update.message.reply_text("❌ Не удалось скачать фото")
+                        await current_update.message.reply_text("❌ Не удалось скачать фото")
                     except:
                         pass
                 return
@@ -686,10 +685,9 @@ async def process_post(message, context: ContextTypes.DEFAULT_TYPE, source: str 
             caption = text[:1024] if text else ""
             
             # Статус "готово"
-            if source == "user":
+            if source == "user" and current_update:
                 try:
-                    if current_update:
-                        await current_update.message.reply_text("✅ Готово! Отправляю в канал...")
+                    await current_update.message.reply_text("✅ Готово! Отправляю в канал...")
                 except:
                     pass
             
@@ -703,10 +701,9 @@ async def process_post(message, context: ContextTypes.DEFAULT_TYPE, source: str 
             stats['last_post'] = f"Фото в {datetime.now().strftime('%H:%M:%S')}"
             logger.info(f"✅ Фото отправлено в канал {TARGET_CHANNEL_ID}")
             
-            if source == "user":
+            if source == "user" and current_update:
                 try:
-                    if current_update:
-                        await current_update.message.reply_text("📤 Пост успешно опубликован!")
+                    await current_update.message.reply_text("📤 Пост успешно опубликован!")
                 except:
                     pass
             
@@ -716,10 +713,9 @@ async def process_post(message, context: ContextTypes.DEFAULT_TYPE, source: str 
         if hasattr(message, 'video') and message.video:
             logger.info(f"📹 Обработка видео")
             
-            if source == "user":
+            if source == "user" and current_update:
                 try:
-                    if current_update:
-                        await current_update.message.reply_text("🔄 Обрабатываю видео... (это может занять несколько минут)")
+                    await current_update.message.reply_text("🔄 Обрабатываю видео... (это может занять несколько минут)")
                 except:
                     pass
             
@@ -728,10 +724,9 @@ async def process_post(message, context: ContextTypes.DEFAULT_TYPE, source: str 
             if not video_bytes:
                 logger.error("❌ Не удалось скачать видео")
                 stats['errors'] += 1
-                if source == "user":
+                if source == "user" and current_update:
                     try:
-                        if current_update:
-                            await current_update.message.reply_text("❌ Не удалось скачать видео")
+                        await current_update.message.reply_text("❌ Не удалось скачать видео")
                     except:
                         pass
                 return
@@ -739,10 +734,9 @@ async def process_post(message, context: ContextTypes.DEFAULT_TYPE, source: str 
             processed = process_video_bytes(video_bytes, title)
             caption = text[:1024] if text else ""
             
-            if source == "user":
+            if source == "user" and current_update:
                 try:
-                    if current_update:
-                        await current_update.message.reply_text("✅ Готово! Отправляю в канал...")
+                    await current_update.message.reply_text("✅ Готово! Отправляю в канал...")
                 except:
                     pass
             
@@ -758,10 +752,9 @@ async def process_post(message, context: ContextTypes.DEFAULT_TYPE, source: str 
             stats['last_post'] = f"Видео в {datetime.now().strftime('%H:%M:%S')}"
             logger.info(f"✅ Видео отправлено в канал {TARGET_CHANNEL_ID}")
             
-            if source == "user":
+            if source == "user" and current_update:
                 try:
-                    if current_update:
-                        await current_update.message.reply_text("📤 Пост успешно опубликован!")
+                    await current_update.message.reply_text("📤 Пост успешно опубликован!")
                 except:
                     pass
             
@@ -771,10 +764,9 @@ async def process_post(message, context: ContextTypes.DEFAULT_TYPE, source: str 
         if text:
             logger.info(f"📝 Текстовый пост")
             
-            if source == "user":
+            if source == "user" and current_update:
                 try:
-                    if current_update:
-                        await current_update.message.reply_text("📝 Отправляю текстовый пост...")
+                    await current_update.message.reply_text("📝 Отправляю текстовый пост...")
                 except:
                     pass
             
@@ -787,20 +779,18 @@ async def process_post(message, context: ContextTypes.DEFAULT_TYPE, source: str 
             stats['last_post'] = f"Текст в {datetime.now().strftime('%H:%M:%S')}"
             logger.info(f"✅ Текст отправлен в канал {TARGET_CHANNEL_ID}")
             
-            if source == "user":
+            if source == "user" and current_update:
                 try:
-                    if current_update:
-                        await current_update.message.reply_text("📤 Пост успешно опубликован!")
+                    await current_update.message.reply_text("📤 Пост успешно опубликован!")
                 except:
                     pass
             
             return
         
         logger.info("ℹ️ Пост пустой, пропускаем")
-        if source == "user":
+        if source == "user" and current_update:
             try:
-                if current_update:
-                    await current_update.message.reply_text("⚠️ Пост пустой, пропускаю")
+                await current_update.message.reply_text("⚠️ Пост пустой, пропускаю")
             except:
                 pass
         
@@ -810,10 +800,9 @@ async def process_post(message, context: ContextTypes.DEFAULT_TYPE, source: str 
         logger.error(f"❌ Ошибка обработки поста: {e}")
         traceback.print_exc()
         
-        if source == "user":
+        if source == "user" and current_update:
             try:
-                if current_update:
-                    await current_update.message.reply_text(f"❌ Ошибка при обработке: {str(e)[:200]}")
+                await current_update.message.reply_text(f"❌ Ошибка при обработке: {str(e)[:200]}")
             except:
                 pass
     finally:
