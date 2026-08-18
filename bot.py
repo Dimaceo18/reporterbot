@@ -55,7 +55,7 @@ except ImportError:
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 SOURCE_CHANNEL_ID = os.getenv("SOURCE_CHANNEL_ID")
-SOURCE_CHANNEL_2_ID = os.getenv("SOURCE_CHANNEL_2_ID")  # Новый канал-источник
+SOURCE_CHANNEL_2_ID = os.getenv("SOURCE_CHANNEL_2_ID")
 TARGET_CHANNEL_ID = os.getenv("TARGET_CHANNEL_ID")
 
 if not BOT_TOKEN:
@@ -128,7 +128,7 @@ def download_fonts():
             logger.info(f"✅ Шрифт {font_name} уже есть (размер: {os.path.getsize(font_name)} байт)")
 
 def load_font(font_name: str, size: int):
-    """Загрузка шрифта с fallback (без логов для уменьшения шума)"""
+    """Загрузка шрифта с fallback (без логов)"""
     # Пробуем Montserrat
     try:
         if os.path.exists("Montserrat-Black.ttf"):
@@ -157,7 +157,6 @@ def load_font(font_name: str, size: int):
         except:
             pass
     
-    # Последний шанс - встроенный
     return ImageFont.load_default()
 
 # ==================== ОБРАБОТКА ИЗОБРАЖЕНИЙ ====================
@@ -230,8 +229,8 @@ def fit_text_block(draw, text: str, safe_w: int, max_block_h: int,
         text = " "
     
     # Ограничиваем длину текста
-    if len(text) > 200:
-        text = text[:197] + "..."
+    if len(text) > 300:
+        text = text[:297] + "..."
     
     size = start_size
     attempts = 0
@@ -329,19 +328,19 @@ def extract_title_from_text(text: str) -> str:
     if '\n' in clean_text:
         lines = clean_text.split('\n')
         title = lines[0].strip()
-        if len(title) > 150:
-            title = title[:147] + "..."
+        if len(title) > 300:
+            title = title[:297] + "..."
         return title
     
     if '. ' in clean_text and len(clean_text) > 100:
         parts = clean_text.split('. ', 1)
         title = (parts[0] + '.').strip()
-        if len(title) > 150:
-            title = title[:147] + "..."
+        if len(title) > 300:
+            title = title[:297] + "..."
         return title
     
-    if len(clean_text) > 150:
-        return clean_text[:147] + "..."
+    if len(clean_text) > 300:
+        return clean_text[:297] + "..."
     return clean_text
 
 def process_image(img: Image.Image, title_text: str) -> Image.Image:
@@ -498,14 +497,12 @@ async def send_status_notification(update: Update, context: ContextTypes.DEFAULT
     }
     
     try:
-        # Отправляем статус в личку пользователю, если это репост в бота
         if update and update.message and update.message.from_user:
             await update.message.reply_text(
                 f"{status_messages.get(status, status)}",
                 parse_mode="HTML"
             )
         
-        # Если указан post_id, обновляем статус в хранилище
         if post_id:
             post_statuses[post_id] = {
                 "status": status,
@@ -571,9 +568,7 @@ async def test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         bot = context.bot
         
-        # Проверяем каналы-источники
         source_statuses = []
-        
         for idx, channel_id in enumerate([SOURCE_CHANNEL_ID, SOURCE_CHANNEL_2_ID], 1):
             if not channel_id:
                 source_statuses.append(f"⚠️ Канал {idx} не указан")
@@ -584,14 +579,12 @@ async def test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 source_statuses.append(f"❌ Ошибка: {e}")
         
-        # Проверяем целевой канал
         try:
             target = await bot.get_chat(TARGET_CHANNEL_ID)
             target_status = f"✅ {target.title} (ID: {TARGET_CHANNEL_ID})"
         except Exception as e:
             target_status = f"❌ Ошибка: {e}"
         
-        # Проверяем бота
         me = await bot.get_me()
         
         await update.message.reply_text(
@@ -610,13 +603,12 @@ async def test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Ошибка проверки: {e}")
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда для просмотра статусов обрабатываемых постов"""
     if not post_statuses:
         await update.message.reply_text("📭 Нет постов в обработке")
         return
     
     status_text = "📊 <b>Статусы постов:</b>\n\n"
-    for post_id, data in list(post_statuses.items())[-10:]:  # Показываем последние 10
+    for post_id, data in list(post_statuses.items())[-10:]:
         status_text += f"🆔 {post_id[:8]}...\n"
         status_text += f"📌 Статус: {data['message']}\n"
         status_text += f"⏱ {data['timestamp'].strftime('%H:%M:%S')}\n\n"
@@ -626,19 +618,14 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== ОБРАБОТКА ПОСТОВ ====================
 
 async def process_post(message, context: ContextTypes.DEFAULT_TYPE, source: str = "channel"):
-    """Обработка поста с уведомлениями о статусе"""
     try:
-        # Генерируем ID поста
         post_id = f"{datetime.now().strftime('%Y%m%d%H%M%S')}_{stats['processed']}"
         
-        # Обновляем статистику
         stats['pending_posts'] += 1
         stats['processing'] = True
         
-        # Получаем update из контекста для отправки статусов
         current_update = context.user_data.get('current_update') if source == "user" else None
         
-        # Отправляем статус "получен"
         if source == "user" and current_update:
             try:
                 await current_update.message.reply_text("📥 Пост получен! Начинаю обработку...")
@@ -650,7 +637,6 @@ async def process_post(message, context: ContextTypes.DEFAULT_TYPE, source: str 
         
         logger.info(f"📝 Заголовок: {title[:50] if title else 'нет'}")
         
-        # Статус "скачивание"
         if source == "user" and current_update:
             try:
                 await current_update.message.reply_text("⬇️ Скачиваю медиафайлы...")
@@ -661,7 +647,6 @@ async def process_post(message, context: ContextTypes.DEFAULT_TYPE, source: str 
         if hasattr(message, 'photo') and message.photo:
             logger.info(f"📸 Обработка фото")
             
-            # Статус "обработка"
             if source == "user" and current_update:
                 try:
                     await current_update.message.reply_text("🔄 Обрабатываю изображение...")
@@ -684,7 +669,6 @@ async def process_post(message, context: ContextTypes.DEFAULT_TYPE, source: str 
             processed = process_photo_bytes(photo_bytes, title)
             caption = text[:1024] if text else ""
             
-            # Статус "готово"
             if source == "user" and current_update:
                 try:
                     await current_update.message.reply_text("✅ Готово! Отправляю в канал...")
@@ -814,18 +798,15 @@ async def process_post(message, context: ContextTypes.DEFAULT_TYPE, source: str 
 # ==================== ОБРАБОТЧИКИ СООБЩЕНИЙ ====================
 
 async def handle_channel_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик постов из каналов-источников"""
     message = update.channel_post
     if not message:
         logger.info("❌ Нет сообщения в update")
         return
     
-    # Проверяем, является ли канал источником
     if message.chat.id not in [SOURCE_CHANNEL_ID, SOURCE_CHANNEL_2_ID]:
         logger.info(f"⏭️ Пропускаем: канал {message.chat.id} не в списке источников")
         return
     
-    # Проверяем, есть ли контент для обработки
     has_content = (
         (hasattr(message, 'photo') and bool(message.photo)) or
         (hasattr(message, 'video') and bool(message.video)) or
@@ -842,16 +823,13 @@ async def handle_channel_post(update: Update, context: ContextTypes.DEFAULT_TYPE
     await process_post(message, context, source="channel")
 
 async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик сообщений от пользователей (репостов в бота)"""
     message = update.message
     if not message:
         return
     
-    # Игнорируем команды
     if message.text and message.text.startswith('/'):
         return
     
-    # Проверяем, есть ли контент для обработки
     has_content = (
         (hasattr(message, 'photo') and bool(message.photo)) or
         (hasattr(message, 'video') and bool(message.video)) or
@@ -862,10 +840,8 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         await message.reply_text("📭 Отправьте мне фото, видео или текст для обработки и публикации.")
         return
     
-    # Сохраняем update для отправки статусов
     context.user_data['current_update'] = update
     
-    # Отправляем начальный статус
     await message.reply_text("📥 Пост получен! Начинаю обработку...")
     
     logger.info(f"📨 Новый пост от пользователя {message.from_user.id}")
@@ -879,21 +855,17 @@ async def main():
     logger.info("🚀 Бот для репоста с оформлением ЧП ВМ запускается...")
     logger.info(f"📊 Версия с поддержкой статусов и несколькими источниками")
     
-    # Скачиваем шрифты
     download_fonts()
     
-    # Создаем приложение
     app = Application.builder().token(BOT_TOKEN).build()
     bot = Bot(token=BOT_TOKEN)
     
-    # Удаляем webhook
     try:
         await bot.delete_webhook(drop_pending_updates=True)
         logger.info("✅ Webhook удалён")
     except Exception as e:
         logger.warning(f"⚠️ Ошибка удаления webhook: {e}")
     
-    # Проверяем доступ к каналам
     source_channels = [SOURCE_CHANNEL_ID]
     if SOURCE_CHANNEL_2_ID:
         source_channels.append(SOURCE_CHANNEL_2_ID)
@@ -915,19 +887,16 @@ async def main():
         logger.info("💡 Убедитесь, что бот добавлен в канал как администратор")
         return
     
-    # Регистрируем команды
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("stats", stats_command))
     app.add_handler(CommandHandler("test", test_command))
     app.add_handler(CommandHandler("status", status_command))
     
-    # Регистрируем обработчик постов из каналов
     app.add_handler(MessageHandler(
         filters.Chat(chat_id=source_channels),
         handle_channel_post
     ))
     
-    # Регистрируем обработчик сообщений от пользователей (репостов)
     app.add_handler(MessageHandler(
         filters.ALL & ~filters.COMMAND,
         handle_user_message
@@ -940,7 +909,6 @@ async def main():
     logger.info(f"  • Затемнение: {int(BRIGHTNESS_FACTOR*100)}%")
     logger.info(f"📊 Количество каналов-источников: {len(source_channels)}")
     
-    # Запускаем бота
     await app.initialize()
     await app.start()
     
@@ -958,7 +926,6 @@ async def main():
     logger.info("📨 Отправьте пост в канал-источник или репостните боту для теста")
     logger.info("💡 Команды для проверки: /start, /stats, /test, /status")
     
-    # Бесконечный цикл
     while True:
         await asyncio.sleep(1)
 
