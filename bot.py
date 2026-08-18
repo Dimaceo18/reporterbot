@@ -7,7 +7,7 @@ import sys
 import tempfile
 import subprocess
 from io import BytesIO
-from typing import Optional
+from typing import Optional, List
 import traceback
 import asyncio
 from datetime import datetime
@@ -39,7 +39,7 @@ install_dependencies()
 import requests
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont, ImageEnhance
-from telegram import Bot, Update
+from telegram import Bot, Update, InputMediaPhoto, InputMediaVideo
 from telegram.ext import Application, MessageHandler, filters, ContextTypes, CommandHandler
 
 try:
@@ -94,6 +94,9 @@ stats = {
     "last_post": None,
     "last_error": None
 }
+
+# Хранилище для медиагрупп
+pending_media_groups = {}
 
 # ==================== ШРИФТЫ ====================
 
@@ -466,6 +469,15 @@ async def download_media(bot: Bot, file_id: str) -> Optional[bytes]:
         logger.error(f"❌ Ошибка скачивания: {e}")
         return None
 
+async def download_media_bytes(bot: Bot, file_id: str) -> Optional[bytes]:
+    try:
+        file = await bot.get_file(file_id)
+        result = await file.download_as_bytearray()
+        return bytes(result)
+    except Exception as e:
+        logger.error(f"❌ Ошибка скачивания: {e}")
+        return None
+
 def get_text_from_message(message) -> str:
     return message.text or message.caption or ""
 
@@ -485,8 +497,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"⏱ Работает: {hours}ч {minutes}м\n"
         f"📌 Последний пост: {stats['last_post'] or 'нет'}\n\n"
         f"📌 <b>Как использовать:</b>\n"
-        f"• Отправьте боту пост (фото/видео/текст) - он обработает и опубликует\n"
+        f"• Отправьте боту пост (фото/видео) - он обработает и опубликует\n"
         f"• Посты из канала-источника обрабатываются автоматически\n"
+        f"• Если в посте несколько медиа - обрабатывается только первое\n"
         f"• Команда /stats - статистика\n"
         f"• Команда /test - проверка подключения\n\n"
         f"✅ <b>Бот работает!</b>",
@@ -544,10 +557,141 @@ async def test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"❌ Ошибка проверки: {e}")
 
+# ==================== ОБРАБОТКА МЕДИАГРУПП ====================
+
+async def process_media_group(media_group_id: str, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка собранной медиагруппы"""
+    group = pending_media_groups.get(media_group_id)
+    if not group or group.get("processed"):
+        return
+    
+    group["processed"] = True
+    
+    try:
+        message = group["message"]
+        bot = context.bot
+        
+        # Получаем текст и заголовок
+        text = group.get("caption", "")
+        title = extract_title_from_text(text)
+        
+        # Собираем все медиа
+        media_files = []
+        
+        # Фото
+        for photo in group.get("photos", []):
+            media_files.append({"type": "photo", "data": photo, "file_id": photo.get("file_id")})
+        
+        # Видео
+        for video in group.get("videos", []):
+            media_files.append({"type": "video", "data": video, "file_id": video.get("file_id")})
+        
+        if not media_files:
+            logger.warning(f"⚠️ Нет медиа в группе {media_group_id}")
+            return
+        
+        logger.info(f"📦 Обработка медиагруппы: {len(media_files)} файлов")
+        
+        # Обрабатываем только ПЕРВОЕ медиа
+        first_media = media_files[0]
+        processed_first = None
+        
+        if first_media["type"] == "photo":
+            logger.info(f"📸 Обработка первого фото из группы")
+            photo_bytes = await download_media(bot, first_media["file_id"])
+            if photo_bytes:
+                processed_first = process_photo_bytes(photo_bytes, title)
+                first_media["processed_data"] = processed_first
+        elif first_media["type"] == "video":
+            logger.info(f"📹 Обработка первого видео из группы")
+            video_bytes = await download_media(bot, first_media["file_id"])
+            if video_bytes:
+                processed_first = process_video_bytes(video_bytes, title)
+                first_media["processed_data"] = processed_first
+        
+        # Формируем медиагруппу для отправки
+        media_group = []
+        caption = text[:1024] if text else ""
+        
+        # Добавляем обработанное первое медиа
+        if processed_first and len(processed_first.getvalue()) > 0:
+            if first_media["type"] == "photo":
+                media_group.append(
+                    InputMediaPhoto(
+                        media=BytesIO(processed_first.getvalue()),
+                        caption=caption,
+                        parse_mode="HTML"
+                    )
+                )
+            elif first_media["type"] == "video":
+                media_group.append(
+                    InputMediaVideo(
+                        media=BytesIO(processed_first.getvalue()),
+                        caption=caption,
+                        parse_mode="HTML",
+                        width=TARGET_W,
+                        height=TARGET_H
+                    )
+                )
+        else:
+            # Если не удалось обработать - отправляем оригинал
+            if first_media["type"] == "photo":
+                media_group.append(
+                    InputMediaPhoto(
+                        media=first_media["file_id"],
+                        caption=caption,
+                        parse_mode="HTML"
+                    )
+                )
+            elif first_media["type"] == "video":
+                media_group.append(
+                    InputMediaVideo(
+                        media=first_media["file_id"],
+                        caption=caption,
+                        parse_mode="HTML"
+                    )
+                )
+        
+        # Добавляем остальные медиа (БЕЗ ОБРАБОТКИ)
+        for media in media_files[1:]:
+            if media["type"] == "photo":
+                media_group.append(
+                    InputMediaPhoto(
+                        media=media["file_id"]
+                    )
+                )
+            elif media["type"] == "video":
+                media_group.append(
+                    InputMediaVideo(
+                        media=media["file_id"]
+                    )
+                )
+        
+        # Отправляем медиагруппу
+        if media_group:
+            await bot.send_media_group(
+                chat_id=TARGET_CHANNEL_ID,
+                media=media_group
+            )
+            stats['processed'] += 1
+            stats['last_post'] = f"Медиагруппа в {datetime.now().strftime('%H:%M:%S')}"
+            logger.info(f"✅ Медиагруппа отправлена в канал {TARGET_CHANNEL_ID}")
+        else:
+            logger.error(f"❌ Не удалось сформировать медиагруппу")
+        
+    except Exception as e:
+        stats['errors'] += 1
+        logger.error(f"❌ Ошибка обработки медиагруппы: {e}")
+        traceback.print_exc()
+    finally:
+        # Очищаем
+        if media_group_id in pending_media_groups:
+            del pending_media_groups[media_group_id]
+
 # ==================== ОБРАБОТКА ПОСТОВ ====================
 
-async def process_post(message, context: ContextTypes.DEFAULT_TYPE, source: str = "channel"):
-    """Обработка поста из канала или от пользователя"""
+async def process_single_post(message, context: ContextTypes.DEFAULT_TYPE, source: str = "channel"):
+    """Обработка одиночного поста (не медиагруппа)"""
     try:
         text = get_text_from_message(message)
         title = extract_title_from_text(text)
@@ -653,17 +797,48 @@ async def handle_channel_post(update: Update, context: ContextTypes.DEFAULT_TYPE
         logger.info("❌ Нет сообщения в update")
         return
     
-    logger.info(f"📨 ПОСТ ПОЛУЧЕН! ID канала: {message.chat.id}, SOURCE: {SOURCE_CHANNEL_ID}")
-    logger.info(f"📝 Есть фото: {hasattr(message, 'photo') and bool(message.photo)}")
-    logger.info(f"📝 Есть видео: {hasattr(message, 'video') and bool(message.video)}")
-    logger.info(f"📝 Есть текст: {bool(get_text_from_message(message))}")
-    
     if message.chat.id != SOURCE_CHANNEL_ID:
         logger.info(f"⏭️ Пропускаем: канал {message.chat.id} не равен {SOURCE_CHANNEL_ID}")
         return
     
+    # Проверяем, является ли это медиагруппой
+    media_group_id = getattr(message, 'media_group_id', None)
+    
+    if media_group_id:
+        logger.info(f"📦 Медиагруппа в канале: {media_group_id}")
+        
+        # Добавляем в хранилище
+        if media_group_id not in pending_media_groups:
+            pending_media_groups[media_group_id] = {
+                "message": message,
+                "caption": message.caption or "",
+                "photos": [],
+                "videos": [],
+                "processed": False,
+                "timestamp": datetime.now()
+            }
+        
+        group = pending_media_groups[media_group_id]
+        
+        # Сохраняем медиа
+        if hasattr(message, 'photo') and message.photo:
+            group["photos"].append({"file_id": message.photo[-1].file_id, "photo": message.photo[-1]})
+            logger.info(f"📸 Добавлено фото в группу {media_group_id}, всего: {len(group['photos'])}")
+        
+        if hasattr(message, 'video') and message.video:
+            group["videos"].append({"file_id": message.video.file_id, "video": message.video})
+            logger.info(f"📹 Добавлено видео в группу {media_group_id}, всего: {len(group['videos'])}")
+        
+        # Запускаем таймер для обработки группы (ждем 3 секунды, чтобы собрать все части)
+        if not group.get("timer_started"):
+            group["timer_started"] = True
+            asyncio.create_task(delayed_process_media_group(media_group_id, context))
+        
+        return
+    
+    # Одиночный пост
     logger.info(f"📨 Новый пост в канале {SOURCE_CHANNEL_ID}")
-    await process_post(message, context, source="channel")
+    await process_single_post(message, context, source="channel")
 
 async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик сообщений от пользователей (репостов в бота)"""
@@ -671,11 +846,43 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not message:
         return
     
-    # Игнорируем команды
     if message.text and message.text.startswith('/'):
         return
     
-    # Проверяем, есть ли контент для обработки
+    # Проверяем, является ли это медиагруппой
+    media_group_id = getattr(message, 'media_group_id', None)
+    
+    if media_group_id:
+        logger.info(f"📦 Медиагруппа от пользователя: {media_group_id}")
+        
+        if media_group_id not in pending_media_groups:
+            pending_media_groups[media_group_id] = {
+                "message": message,
+                "caption": message.caption or "",
+                "photos": [],
+                "videos": [],
+                "processed": False,
+                "timestamp": datetime.now()
+            }
+        
+        group = pending_media_groups[media_group_id]
+        
+        if hasattr(message, 'photo') and message.photo:
+            group["photos"].append({"file_id": message.photo[-1].file_id, "photo": message.photo[-1]})
+            logger.info(f"📸 Добавлено фото в группу от пользователя, всего: {len(group['photos'])}")
+        
+        if hasattr(message, 'video') and message.video:
+            group["videos"].append({"file_id": message.video.file_id, "video": message.video})
+            logger.info(f"📹 Добавлено видео в группу от пользователя, всего: {len(group['videos'])}")
+        
+        if not group.get("timer_started"):
+            group["timer_started"] = True
+            await message.reply_text("📥 Медиагруппа получена! Начинаю обработку...")
+            asyncio.create_task(delayed_process_media_group(media_group_id, context, user_message=message))
+        
+        return
+    
+    # Одиночный пост от пользователя
     has_content = (
         (hasattr(message, 'photo') and bool(message.photo)) or
         (hasattr(message, 'video') and bool(message.video)) or
@@ -689,12 +896,24 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     logger.info(f"📨 Новый пост от пользователя {message.from_user.id}")
     await message.reply_text("📥 Пост получен! Начинаю обработку...")
     
-    await process_post(message, context, source="user")
+    await process_single_post(message, context, source="user")
+
+async def delayed_process_media_group(media_group_id: str, context: ContextTypes.DEFAULT_TYPE, user_message=None):
+    """Отложенная обработка медиагруппы (ждем 3 секунды)"""
+    await asyncio.sleep(3)
+    await process_media_group(media_group_id, context)
+    
+    if user_message:
+        try:
+            await user_message.reply_text("✅ Медиагруппа обработана и опубликована в канале!")
+        except:
+            pass
 
 # ==================== ЗАПУСК ====================
 
 async def main():
     logger.info("🚀 Бот для репоста с оформлением ЧП ВМ запускается...")
+    logger.info("📊 Версия с поддержкой медиагрупп")
     
     download_fonts()
     
@@ -745,6 +964,7 @@ async def main():
     logger.info(f"  • Размер: {TARGET_W}x{TARGET_H}")
     logger.info(f"  • Градиент: {int(CHP_GRADIENT_PCT*100)}%")
     logger.info(f"  • Затемнение: {int(BRIGHTNESS_FACTOR*100)}%")
+    logger.info("📦 Поддержка медиагрупп: включена")
     
     await app.initialize()
     await app.start()
