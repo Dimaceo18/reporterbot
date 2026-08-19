@@ -55,6 +55,7 @@ except ImportError:
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 SOURCE_CHANNEL_ID = os.getenv("SOURCE_CHANNEL_ID")
+SOURCE_CHANNEL_2_ID = os.getenv("SOURCE_CHANNEL_2_ID")
 TARGET_CHANNEL_ID = os.getenv("TARGET_CHANNEL_ID")
 
 if not BOT_TOKEN:
@@ -67,8 +68,15 @@ if not TARGET_CHANNEL_ID:
 try:
     SOURCE_CHANNEL_ID = int(SOURCE_CHANNEL_ID)
     TARGET_CHANNEL_ID = int(TARGET_CHANNEL_ID)
+    if SOURCE_CHANNEL_2_ID:
+        SOURCE_CHANNEL_2_ID = int(SOURCE_CHANNEL_2_ID)
 except ValueError:
-    raise ValueError("❌ SOURCE_CHANNEL_ID и TARGET_CHANNEL_ID должны быть числами!")
+    raise ValueError("❌ ID каналов должны быть числами!")
+
+# Список каналов-источников
+SOURCE_CHANNELS = [SOURCE_CHANNEL_ID]
+if SOURCE_CHANNEL_2_ID:
+    SOURCE_CHANNELS.append(SOURCE_CHANNEL_2_ID)
 
 # Стиль ЧП ВМ
 TARGET_W, TARGET_H = 720, 900
@@ -475,9 +483,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     hours = uptime.seconds // 3600
     minutes = (uptime.seconds % 3600) // 60
     
+    channels_text = ""
+    for i, ch in enumerate(SOURCE_CHANNELS, 1):
+        channels_text += f"  • <code>{ch}</code>\n"
+    
     await update.message.reply_text(
         f"🤖 <b>Бот для репоста с оформлением ЧП ВМ</b>\n\n"
-        f"📢 Канал-источник: <code>{SOURCE_CHANNEL_ID}</code>\n"
+        f"📢 Каналы-источники ({len(SOURCE_CHANNELS)}):\n{channels_text}"
         f"📢 Целевой канал: <code>{TARGET_CHANNEL_ID}</code>\n"
         f"📊 Обработано: {stats['processed']}\n"
         f"❌ Ошибок: {stats['errors']}\n"
@@ -485,7 +497,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📌 Последний пост: {stats['last_post'] or 'нет'}\n\n"
         f"📌 <b>Как использовать:</b>\n"
         f"• Отправьте боту пост (фото/видео) - он обработает и опубликует\n"
-        f"• Посты из канала-источника обрабатываются автоматически\n"
+        f"• Посты из каналов-источников обрабатываются автоматически\n"
         f"• Если в посте несколько медиа - обрабатывается только первое\n"
         f"• Команда /stats - статистика\n"
         f"• Команда /test - проверка подключения\n\n"
@@ -498,6 +510,10 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     hours = uptime.seconds // 3600
     minutes = (uptime.seconds % 3600) // 60
     
+    channels_text = ""
+    for i, ch in enumerate(SOURCE_CHANNELS, 1):
+        channels_text += f"  • <code>{ch}</code>\n"
+    
     await update.message.reply_text(
         f"📊 <b>Статистика бота</b>\n\n"
         f"⏱ <b>Время работы:</b> {hours}ч {minutes}м\n"
@@ -505,7 +521,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"❌ <b>Ошибок:</b> {stats['errors']}\n"
         f"📅 <b>Запущен:</b> {stats['started_at'].strftime('%d.%m.%Y %H:%M:%S')}\n"
         f"📌 <b>Последний пост:</b> {stats['last_post'] or 'нет'}\n"
-        f"📢 <b>Канал-источник:</b> <code>{SOURCE_CHANNEL_ID}</code>\n"
+        f"📢 <b>Каналы-источники ({len(SOURCE_CHANNELS)}):</b>\n{channels_text}"
         f"📢 <b>Целевой канал:</b> <code>{TARGET_CHANNEL_ID}</code>\n"
         f"🐍 <b>Python:</b> {sys.version.split()[0]}\n\n"
         f"✅ <b>Бот работает</b> 🟢",
@@ -517,11 +533,13 @@ async def test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         bot = context.bot
         
-        try:
-            source = await bot.get_chat(SOURCE_CHANNEL_ID)
-            source_status = f"✅ {source.title} (ID: {SOURCE_CHANNEL_ID})"
-        except Exception as e:
-            source_status = f"❌ Ошибка: {e}"
+        source_statuses = []
+        for i, channel_id in enumerate(SOURCE_CHANNELS, 1):
+            try:
+                source = await bot.get_chat(channel_id)
+                source_statuses.append(f"✅ Канал {i}: {source.title} (ID: {channel_id})")
+            except Exception as e:
+                source_statuses.append(f"❌ Канал {i}: Ошибка - {e}")
         
         try:
             target = await bot.get_chat(TARGET_CHANNEL_ID)
@@ -534,7 +552,7 @@ async def test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             f"🔍 <b>Проверка подключения</b>\n\n"
             f"🤖 <b>Бот:</b> @{me.username}\n"
-            f"📢 <b>Канал-источник:</b> {source_status}\n"
+            f"{chr(10).join(source_statuses)}\n"
             f"📢 <b>Целевой канал:</b> {target_status}\n"
             f"📊 <b>Обработано:</b> {stats['processed']}\n"
             f"❌ <b>Ошибок:</b> {stats['errors']}\n\n"
@@ -778,21 +796,22 @@ async def process_single_post(message, context: ContextTypes.DEFAULT_TYPE, sourc
                 pass
 
 async def handle_channel_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик постов из канала-источника"""
+    """Обработчик постов из каналов-источников"""
     message = update.channel_post
     if not message:
         logger.info("❌ Нет сообщения в update")
         return
     
-    if message.chat.id != SOURCE_CHANNEL_ID:
-        logger.info(f"⏭️ Пропускаем: канал {message.chat.id} не равен {SOURCE_CHANNEL_ID}")
+    # Проверяем, является ли канал источником
+    if message.chat.id not in SOURCE_CHANNELS:
+        logger.info(f"⏭️ Пропускаем: канал {message.chat.id} не в списке источников")
         return
     
     # Проверяем, является ли это медиагруппой
     media_group_id = getattr(message, 'media_group_id', None)
     
     if media_group_id:
-        logger.info(f"📦 Медиагруппа в канале: {media_group_id}")
+        logger.info(f"📦 Медиагруппа в канале {message.chat.id}: {media_group_id}")
         
         # Добавляем в хранилище
         if media_group_id not in pending_media_groups:
@@ -824,7 +843,7 @@ async def handle_channel_post(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
     
     # Одиночный пост
-    logger.info(f"📨 Новый пост в канале {SOURCE_CHANNEL_ID}")
+    logger.info(f"📨 Новый пост в канале {message.chat.id} ({message.chat.title})")
     await process_single_post(message, context, source="channel")
 
 async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -900,7 +919,7 @@ async def delayed_process_media_group(media_group_id: str, context: ContextTypes
 
 async def main():
     logger.info("🚀 Бот для репоста с оформлением ЧП ВМ запускается...")
-    logger.info("📊 Версия с поддержкой медиагрупп")
+    logger.info(f"📊 Количество каналов-источников: {len(SOURCE_CHANNELS)}")
     
     download_fonts()
     
@@ -913,13 +932,15 @@ async def main():
     except Exception as e:
         logger.warning(f"⚠️ Ошибка удаления webhook: {e}")
     
-    try:
-        source = await bot.get_chat(SOURCE_CHANNEL_ID)
-        logger.info(f"✅ Канал-источник: {source.title} (ID: {SOURCE_CHANNEL_ID})")
-    except Exception as e:
-        logger.error(f"❌ Ошибка доступа к каналу-источнику: {e}")
-        logger.info("💡 Убедитесь, что бот добавлен в канал как администратор")
-        return
+    # Проверяем доступ к каналам-источникам
+    for i, channel_id in enumerate(SOURCE_CHANNELS, 1):
+        try:
+            source = await bot.get_chat(channel_id)
+            logger.info(f"✅ Канал-источник {i}: {source.title} (ID: {channel_id})")
+        except Exception as e:
+            logger.error(f"❌ Ошибка доступа к каналу-источнику {i}: {e}")
+            logger.info("💡 Убедитесь, что бот добавлен в канал как администратор")
+            return
     
     try:
         target = await bot.get_chat(TARGET_CHANNEL_ID)
@@ -934,9 +955,9 @@ async def main():
     app.add_handler(CommandHandler("stats", stats_command))
     app.add_handler(CommandHandler("test", test_command))
     
-    # Регистрируем обработчик постов из канала
+    # Регистрируем обработчик постов из каналов-источников
     app.add_handler(MessageHandler(
-        filters.Chat(chat_id=SOURCE_CHANNEL_ID),
+        filters.Chat(chat_id=SOURCE_CHANNELS),
         handle_channel_post
     ))
     
@@ -951,7 +972,8 @@ async def main():
     logger.info(f"  • Размер: {TARGET_W}x{TARGET_H}")
     logger.info(f"  • Градиент: {int(CHP_GRADIENT_PCT*100)}%")
     logger.info(f"  • Затемнение: {int(BRIGHTNESS_FACTOR*100)}%")
-    logger.info("📦 Поддержка медиагрупп: включена")
+    logger.info(f"📦 Поддержка медиагрупп: включена")
+    logger.info(f"📊 Каналы-источники: {len(SOURCE_CHANNELS)}")
     
     await app.initialize()
     await app.start()
@@ -966,7 +988,7 @@ async def main():
         connect_timeout=30
     )
     
-    logger.info("🟢 Бот запущен и слушает канал и сообщения!")
+    logger.info("🟢 Бот запущен и слушает каналы и сообщения!")
     logger.info("📨 Отправьте пост в канал-источник или репостните боту для теста")
     logger.info("💡 Команды для проверки: /start, /stats, /test")
     
